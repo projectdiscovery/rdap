@@ -62,7 +62,7 @@ func NewASNRegistry(json []byte) (*ASNRegistry, error) {
 	registry, err := NewFile(json)
 
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing ASN registry: %s\n", err)
+		return nil, fmt.Errorf("error parsing ASN registry: %s\n", err)
 	}
 
 	a := make([]asnRange, 0, len(registry.Entries))
@@ -142,7 +142,7 @@ func parseASNRange(asnRange string) (uint32, uint32, error) {
 	asns := strings.Split(asnRange, "-")
 
 	if len(asns) != 1 && len(asns) != 2 {
-		return 0, 0, errors.New("Malformed ASN range")
+		return 0, 0, errors.New("malformed ASN range")
 	}
 
 	minASN, err = strconv.ParseUint(asns[0], 10, 32)

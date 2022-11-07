@@ -48,14 +48,14 @@ func (a netEntrySorter) Less(i int, j int) bool {
 // The document formats are specified in https://tools.ietf.org/html/rfc7484#section-5.1 and https://tools.ietf.org/html/rfc7484#section-5.2.
 func NewNetRegistry(json []byte, ipVersion int) (*NetRegistry, error) {
 	if ipVersion != 4 && ipVersion != 6 {
-		return nil, fmt.Errorf("Unknown IP version %d", ipVersion)
+		return nil, fmt.Errorf("unknown IP version %d", ipVersion)
 	}
 
 	var registry *File
 	registry, err := NewFile(json)
 
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing net registry file: %s", err)
+		return nil, fmt.Errorf("error parsing net registry file: %s", err)
 	}
 
 	n := &NetRegistry{

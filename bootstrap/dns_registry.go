@@ -25,7 +25,7 @@ func NewDNSRegistry(json []byte) (*DNSRegistry, error) {
 	r, err := NewFile(json)
 
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing DNS bootstrap: %s", err)
+		return nil, fmt.Errorf("error parsing DNS bootstrap: %s", err)
 	}
 
 	return &DNSRegistry{

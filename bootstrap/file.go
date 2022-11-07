@@ -53,7 +53,7 @@ func NewFile(jsonDocument []byte) (*File, error) {
 
 	for _, s := range doc.Services {
 		if len(s) != 2 {
-			return nil, errors.New("Malformed bootstrap (bad services array)")
+			return nil, errors.New("malformed bootstrap (bad services array)")
 		}
 
 		entries := s[0]

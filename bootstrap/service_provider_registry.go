@@ -28,7 +28,7 @@ func NewServiceProviderRegistry(json []byte) (*ServiceProviderRegistry, error) {
 	r, err := NewFile(json)
 
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing Service Provider bootstrap: %s", err)
+		return nil, fmt.Errorf("error parsing Service Provider bootstrap: %s", err)
 	}
 
 	return &ServiceProviderRegistry{

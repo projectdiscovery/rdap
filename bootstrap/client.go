@@ -14,36 +14,38 @@
 // files.
 //
 // Basic usage:
-//   question := &bootstrap.Question{
-//     RegistryType: bootstrap.DNS,
-//     Query: "example.cz",
-//   }
 //
-//   b := &bootstrap.Client{}
+//	question := &bootstrap.Question{
+//	  RegistryType: bootstrap.DNS,
+//	  Query: "example.cz",
+//	}
 //
-//   var answer *bootstrap.Answer
-//   answer, err := b.Lookup(question)
+//	b := &bootstrap.Client{}
 //
-//   if err == nil {
-//     for _, url := range answer.URLs {
-//       fmt.Println(url)
-//     }
-//   }
+//	var answer *bootstrap.Answer
+//	answer, err := b.Lookup(question)
+//
+//	if err == nil {
+//	  for _, url := range answer.URLs {
+//	    fmt.Println(url)
+//	  }
+//	}
 //
 // Download and list the contents of the DNS Service Registry:
-//   b := &bootstrap.Client{}
 //
-//   // Before you can use a Registry, you need to download it first.
-//   err := b.Download(bootstrap.DNS) // Downloads https://data.iana.org/rdap/dns.json.
+//	b := &bootstrap.Client{}
 //
-//   if err == nil {
-//     var dns *DNSRegistry = b.DNS()
+//	// Before you can use a Registry, you need to download it first.
+//	err := b.Download(bootstrap.DNS) // Downloads https://data.iana.org/rdap/dns.json.
 //
-//     // Print TLDs with RDAP service.
-//     for tld, _ := range dns.File().Entries {
-//       fmt.Println(tld)
-//     }
-//   }
+//	if err == nil {
+//	  var dns *DNSRegistry = b.DNS()
+//
+//	  // Print TLDs with RDAP service.
+//	  for tld, _ := range dns.File().Entries {
+//	    fmt.Println(tld)
+//	  }
+//	}
 //
 // You can configure bootstrap.Client{} with a custom http.Client, base URL
 // (default https://data.iana.org/rdap), and custom cache. bootstrap.Question{}
@@ -68,16 +70,16 @@
 //
 // Disk cache usage:
 //
-//   b := bootstrap.NewClient()
-//   b.Cache = cache.NewDiskCache()
+//	b := bootstrap.NewClient()
+//	b.Cache = cache.NewDiskCache()
 //
-//   dsr := b.DNS()  // Tries to load dns.json from disk cache, doesn't exist yet, so returns nil.
-//   b.Download(bootstrap.DNS) // Downloads dns.json, saves to disk cache.
+//	dsr := b.DNS()  // Tries to load dns.json from disk cache, doesn't exist yet, so returns nil.
+//	b.Download(bootstrap.DNS) // Downloads dns.json, saves to disk cache.
 //
-//   b2 := bootstrap.NewClient()
-//   b2.Cache = cache.NewDiskCache()
+//	b2 := bootstrap.NewClient()
+//	b2.Cache = cache.NewDiskCache()
 //
-//   dsr2 := b.DNS()  // Loads dns.json from disk cache.
+//	dsr2 := b.DNS()  // Loads dns.json from disk cache.
 //
 // This package also implements the experimental Service Provider registry. Due
 // to the experimental nature, no Service Registry file exists on data.iana.org
@@ -91,6 +93,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -233,7 +236,7 @@ func (c *Client) download(ctx context.Context, registry RegistryType) ([]byte, R
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, nil, fmt.Errorf("Server returned non-200 status code: %s", resp.Status)
+		return nil, nil, fmt.Errorf("server returned non-200 status code: %s", resp.Status)
 	}
 
 	json, err := ioutil.ReadAll(resp.Body)
@@ -334,14 +337,19 @@ func (c *Client) Lookup(question *Question) (*Answer, error) {
 		c.Verbose("  bootstrap: Using cached Service Registry file")
 	}
 
-	answer, err := c.registries[registry].Lookup(question)
+	reg, ok := c.registries[registry]
+	if !ok {
+		return nil, errors.New("registry not found")
+	}
+
+	answer, err := reg.Lookup(question)
 
 	if answer != nil {
 		c.Verbose(fmt.Sprintf("  bootstrap: Looked up '%s'", answer.Query))
 		if answer.Entry != "" {
 			c.Verbose(fmt.Sprintf("  bootstrap: Matching entry '%s'", answer.Entry))
 		} else {
-			c.Verbose(fmt.Sprintf("  bootstrap: No match"))
+			c.Verbose("  bootstrap: No match")
 		}
 
 		for i, url := range answer.URLs {
@@ -363,7 +371,6 @@ func (c *Client) ASN() *ASNRegistry {
 	return s
 }
 
-//
 // DNS returns the current DNS Registry (or nil if the registry file hasn't been Download()ed).
 //
 // This function never initiates a network transfer.

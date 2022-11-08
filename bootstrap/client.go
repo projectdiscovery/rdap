@@ -350,9 +350,7 @@ func (c *Client) Lookup(question *Question) (*Answer, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	answer, err := reg.Lookup(question)
-
 	if answer != nil {
 		c.Verbose(fmt.Sprintf("  bootstrap: Looked up '%s'", answer.Query))
 		if answer.Entry != "" {

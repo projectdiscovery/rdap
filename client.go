@@ -108,6 +108,9 @@ func (c *Client) Do(req *Request) (*Response, error) {
 	// Init Verbose callback?
 	if c.Verbose == nil {
 		c.Verbose = func(text string) {}
+		c.Bootstrap.Verbose = func(text string) {}
+	} else {
+		c.Bootstrap.Verbose = c.Verbose
 	}
 
 	c.Verbose("")

@@ -6,6 +6,7 @@ package rdap
 
 import (
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/projectdiscovery/rdap/bootstrap"
@@ -17,7 +18,7 @@ type Response struct {
 	HTTP            []*HTTPResponse
 }
 
-type RDAPObject interface{}
+type RDAPObject any
 
 type HTTPResponse struct {
 	URL      string
@@ -52,6 +53,9 @@ func newWhoisStyleResponse() *WhoisStyleResponse {
 	return w
 }
 
+// ToWhoisStyleResponse converts the response into an ordered set of WHOIS-style
+// key/value fields. Only Domain responses are supported; others yield an empty
+// result.
 func (r *Response) ToWhoisStyleResponse() *WhoisStyleResponse {
 	w := newWhoisStyleResponse()
 
@@ -67,8 +71,8 @@ func (r *Response) ToWhoisStyleResponse() *WhoisStyleResponse {
 	// Registry Domain ID
 	w.add("Handle", d.Handle)
 
-	// "Registrar WHOIS Server"
-	w.add("Registrar WHOIS Server", d.Port43)
+	// "WHOIS Server"
+	w.add("WHOIS Server", d.Port43)
 
 	// Events.
 	for _, e := range d.Events {
@@ -117,6 +121,23 @@ func (r *Response) ToWhoisStyleResponse() *WhoisStyleResponse {
 		w.add("Name Server", n.LDHName)
 	}
 
+	// "DNSSEC"
+	if s := d.SecureDNS; s != nil {
+		switch {
+		case s.DelegationSigned != nil:
+			if *s.DelegationSigned {
+				w.add("DNSSEC", "signedDelegation")
+			} else {
+				w.add("DNSSEC", "unsigned")
+			}
+		case len(s.DS) > 0:
+			// Some servers omit delegationSigned but still publish DS records.
+			// keyData is deliberately ignored: it is child DNSKEY data and does
+			// not prove the parent has published DS records.
+			w.add("DNSSEC", "signedDelegation")
+		}
+	}
+
 	return w
 }
 
@@ -144,10 +165,8 @@ func addEntityFields(w *WhoisStyleResponse, t string, e *Entity) {
 
 func findFirstEntity(role string, entities []Entity) *Entity {
 	for _, e := range entities {
-		for _, r := range e.Roles {
-			if r == role {
-				return &e
-			}
+		if slices.Contains(e.Roles, role) {
+			return &e
 		}
 	}
 

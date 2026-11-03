@@ -6,22 +6,46 @@ package cache
 
 import (
 	"bytes"
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mitchellh/go-homedir"
 )
 
-func TestDiskCache(t *testing.T) {
-	dir, err := ioutil.TempDir("", "test")
-	if err != nil {
-		t.Fatal(err)
+func TestNewDiskCacheDir(t *testing.T) {
+	homedir.DisableCache = true
+	defer func() { homedir.DisableCache = false }()
+
+	home := t.TempDir()
+
+	t.Setenv("HOME", home)
+
+	// XDG_CACHE_HOME set (absolute).
+	xdg := filepath.Join(home, "custom-cache")
+	t.Setenv("XDG_CACHE_HOME", xdg)
+	if got, want := NewDiskCache().Dir, filepath.Join(xdg, "openrdap"); got != want {
+		t.Errorf("with XDG_CACHE_HOME set: got %q, want %q", got, want)
 	}
-	defer os.RemoveAll(dir)
+
+	// XDG_CACHE_HOME unset -> $HOME/.cache/openrdap.
+	t.Setenv("XDG_CACHE_HOME", "")
+	if got, want := NewDiskCache().Dir, filepath.Join(home, ".cache", "openrdap"); got != want {
+		t.Errorf("with XDG_CACHE_HOME unset: got %q, want %q", got, want)
+	}
+
+	// Relative XDG_CACHE_HOME is ignored per the XDG spec.
+	t.Setenv("XDG_CACHE_HOME", "relative/path")
+	if got, want := NewDiskCache().Dir, filepath.Join(home, ".cache", "openrdap"); got != want {
+		t.Errorf("with relative XDG_CACHE_HOME: got %q, want %q", got, want)
+	}
+}
+
+func TestDiskCache(t *testing.T) {
+	dir := t.TempDir()
 
 	rdapDir := filepath.Join(dir, ".openrdap")
-	
+
 	m1 := NewDiskCache()
 	m1.Dir = rdapDir
 
@@ -48,7 +72,13 @@ func TestDiskCache(t *testing.T) {
 	}
 
 	loaded1, err := m1.Load("asn.json")
+	if err != nil {
+		t.Fatalf("Load failed in m1: %s", err)
+	}
 	loaded2, err := m2.Load("asn.json")
+	if err != nil {
+		t.Fatalf("Load failed in m2: %s", err)
+	}
 
 	if m1.State("asn.json") != Good {
 		t.Fatalf("asn.json expected good in m1")
@@ -56,9 +86,9 @@ func TestDiskCache(t *testing.T) {
 		t.Fatalf("asn.json expected good in m2")
 	}
 
-	if bytes.Compare(loaded1, asn1) != 0 {
+	if !bytes.Equal(loaded1, asn1) {
 		t.Fatalf("loaded1(%v) != asn1(%v)", loaded1, asn1)
-	} else if bytes.Compare(loaded2, asn1) != 0 {
+	} else if !bytes.Equal(loaded2, asn1) {
 		t.Fatalf("loaded2(%v) != asn1(%v)", loaded2, asn1)
 	}
 
@@ -87,7 +117,13 @@ func TestDiskCache(t *testing.T) {
 	m2.Timeout = time.Hour
 
 	loaded1, err = m1.Load("asn.json")
+	if err != nil {
+		t.Fatalf("Load failed in m1: %s", err)
+	}
 	loaded2, err = m2.Load("asn.json")
+	if err != nil {
+		t.Fatalf("Load failed in m2: %s", err)
+	}
 
 	if m1.State("asn.json") != Good {
 		t.Fatalf("asn.json expected good in m1")
@@ -95,10 +131,9 @@ func TestDiskCache(t *testing.T) {
 		t.Fatalf("asn.json expected good in m2")
 	}
 
-	if bytes.Compare(loaded1, asn2) != 0 {
+	if !bytes.Equal(loaded1, asn2) {
 		t.Fatalf("loaded1(%v) != asn2(%v)", loaded1, asn2)
-	} else if bytes.Compare(loaded2, asn2) != 0 {
+	} else if !bytes.Equal(loaded2, asn2) {
 		t.Fatalf("loaded2(%v) != asn2(%v)", loaded2, asn2)
 	}
 }
-

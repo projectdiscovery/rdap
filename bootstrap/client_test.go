@@ -5,9 +5,11 @@
 package bootstrap
 
 import (
-	"net/url"
 	"testing"
+	"time"
 
+	"github.com/jarcoal/httpmock"
+	"github.com/projectdiscovery/rdap/bootstrap/cache"
 	"github.com/projectdiscovery/rdap/test"
 )
 
@@ -18,7 +20,6 @@ func TestDownload(t *testing.T) {
 	c := &Client{}
 
 	err := c.Download(DNS)
-
 	if err != nil {
 		t.Fatalf("Download() error: %s", err)
 	}
@@ -66,15 +67,9 @@ func TestLookups(t *testing.T) {
 		},
 		{
 			ServiceProvider,
-			"12345~VRSN",
+			"12345-FRNIC",
 			true,
-			[]string{"https://rdap.verisignlabs.com/rdap/v1"},
-		},
-		{
-			ServiceProvider,
-			"12345-VRSN",
-			true,
-			[]string{"https://rdap.verisignlabs.com/rdap/v1"},
+			[]string{"https://rdap.nic.fr/"},
 		},
 	}
 
@@ -86,10 +81,6 @@ func TestLookups(t *testing.T) {
 
 	for _, test := range tests {
 		var r *Answer
-
-		if test.Registry == ServiceProvider {
-			c.BaseURL, _ = url.Parse("https://test.rdap.net/rdap/")
-		}
 
 		question := &Question{
 			RegistryType: test.Registry,
@@ -114,7 +105,116 @@ func TestLookups(t *testing.T) {
 				continue
 			}
 		}
+	}
+}
 
+// A pre-populated cache should be used instead of downloading. The HTTP
+// responders here all return 404, so a download attempt fails the test.
+func TestLookupUsesPrePopulatedCache(t *testing.T) {
+	test.Start(test.BootstrapHTTPError)
+	defer test.Finish()
+
+	memCache := cache.NewMemoryCache()
+	if err := memCache.Save("dns.json", test.LoadFile("bootstrap/dns.json")); err != nil {
+		t.Fatalf("Save() error: %s", err)
+	}
+
+	c := &Client{Cache: memCache}
+
+	downloads := httpmock.GetTotalCallCount()
+
+	answer, err := c.Lookup(&Question{RegistryType: DNS, Query: "example.br"})
+	if err != nil {
+		t.Fatalf("Lookup() error: %s", err)
+	}
+
+	if got := httpmock.GetTotalCallCount() - downloads; got != 0 {
+		t.Errorf("pre-populated cache triggered %d downloads, want 0", got)
+	}
+
+	if len(answer.URLs) != 1 || answer.URLs[0].String() != "https://rdap.registro.br/" {
+		t.Errorf("Lookup() got %v, want [https://rdap.registro.br/]", answer.URLs)
+	}
+
+	if c.DNS() == nil {
+		t.Error("DNS() returned nil after loading the registry from the cache")
+	}
+}
+
+// An expired cached file is used when the refresh download fails, rather than
+// failing the lookup.
+func TestLookupFallsBackToExpiredCache(t *testing.T) {
+	test.Start(test.BootstrapHTTPError)
+	defer test.Finish()
+
+	memCache := cache.NewMemoryCache()
+	if err := memCache.Save("dns.json", test.LoadFile("bootstrap/dns.json")); err != nil {
+		t.Fatalf("Save() error: %s", err)
+	}
+
+	memCache.SetTimeout(-1 * time.Second)
+
+	if got := memCache.State("dns.json"); got != cache.Expired {
+		t.Fatalf("cache state = %v, want Expired", got)
+	}
+
+	c := &Client{Cache: memCache}
+
+	downloads := httpmock.GetTotalCallCount()
+
+	answer, err := c.Lookup(&Question{RegistryType: DNS, Query: "example.br"})
+	if err != nil {
+		t.Fatalf("Lookup() error: %s", err)
+	}
+
+	if got := httpmock.GetTotalCallCount() - downloads; got != 1 {
+		t.Errorf("expired cache triggered %d refresh attempts, want 1", got)
+	}
+
+	if len(answer.URLs) != 1 || answer.URLs[0].String() != "https://rdap.registro.br/" {
+		t.Errorf("Lookup() got %v, want [https://rdap.registro.br/]", answer.URLs)
+	}
+}
+
+// An expired file is re-downloaded even though it's already parsed into memory.
+func TestLookupRefreshesExpiredCache(t *testing.T) {
+	test.Start(test.Bootstrap)
+	defer test.Finish()
+
+	c := &Client{}
+
+	if _, err := c.Lookup(&Question{RegistryType: DNS, Query: "example.br"}); err != nil {
+		t.Fatalf("Lookup() error: %s", err)
+	}
+
+	downloads := httpmock.GetTotalCallCount()
+
+	c.Cache.SetTimeout(-1 * time.Second)
+
+	if _, err := c.Lookup(&Question{RegistryType: DNS, Query: "example.br"}); err != nil {
+		t.Fatalf("Lookup() error: %s", err)
+	}
+
+	if got := httpmock.GetTotalCallCount() - downloads; got != 1 {
+		t.Errorf("expired registry triggered %d downloads, want 1", got)
+	}
+}
+
+// An unparseable cached file plus a failed download reports the download error,
+// rather than panicking on the unpopulated registry.
+func TestLookupWithCorruptCacheAndDownloadError(t *testing.T) {
+	test.Start(test.BootstrapHTTPError)
+	defer test.Finish()
+
+	memCache := cache.NewMemoryCache()
+	if err := memCache.Save("dns.json", []byte("{{{ not json")); err != nil {
+		t.Fatalf("Save() error: %s", err)
+	}
+
+	c := &Client{Cache: memCache}
+
+	if _, err := c.Lookup(&Question{RegistryType: DNS, Query: "example.br"}); err == nil {
+		t.Error("Lookup() unexpectedly succeeded")
 	}
 }
 

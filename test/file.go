@@ -5,14 +5,16 @@
 package test
 
 import (
-	"io/ioutil"
 	"log"
+	"os"
 	"path"
 	"runtime"
 )
 
 var testDataPath string
 
+// LoadFile reads the named file from the test data directory and returns its
+// contents, panicking on error.
 func LoadFile(filename string) []byte {
 	var body []byte
 
@@ -20,8 +22,7 @@ func LoadFile(filename string) []byte {
 		testDataPath = findTestDataPath()
 	}
 
-	body, err := ioutil.ReadFile(path.Join(testDataPath, filename))
-
+	body, err := os.ReadFile(path.Join(testDataPath, filename))
 	if err != nil {
 		log.Panic(err)
 	}
@@ -39,4 +40,3 @@ func findTestDataPath() string {
 
 	return path.Join(dir, "testdata")
 }
-

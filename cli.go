@@ -8,11 +8,11 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -23,41 +23,38 @@ import (
 
 	"golang.org/x/crypto/pkcs12"
 
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"github.com/alecthomas/kingpin/v2"
 )
 
 var (
-	version   = "OpenRDAP v0.0.1"
+	// releaseVersion is injected into released binaries at build time via
+	// -ldflags "-X github.com/projectdiscovery/rdap.releaseVersion=<tag>". It is empty
+	// for plain `go build` / `go install`, where the version falls back to the
+	// module build info instead.
+	releaseVersion string
+
+	version   = versionString()
 	usageText = version + `
 (www.openrdap.org)
 
 Usage: rdap [OPTIONS] DOMAIN|IP|ASN|ENTITY|NAMESERVER|RDAP-URL
-  e.g. rdap example.cz
+  e.g. rdap example.com
        rdap 192.0.2.0
        rdap 2001:db8::
        rdap AS2856
+       rdap OPS4-RIPE
        rdap https://rdap.nic.cz/domain/example.cz
 
-       rdap -f registrant -f administrative -f billing amazon.com.br
        rdap --json https://rdap.nic.cz/domain/example.cz
        rdap -s https://rdap.nic.cz -t help
 
 Options:
   -h, --help          Show help message.
+  -V, --version       Print version and quit.
   -v, --verbose       Print verbose messages on STDERR.
 
   -T, --timeout=SECS  Timeout after SECS seconds (default: 30).
   -k, --insecure      Disable SSL certificate verification.
-
-  -e, --experimental  Enable some experimental options:
-                      - Use the bootstrap service https://test.rdap.net/rdap
-                      - Enable object tag support
-
-Authentication options:
-  -P, --p12=cert.p12[:password] Use client certificate & private key (PKCS#12 format)
-or:
-  -C, --cert=cert.pem           Use client certificate (PEM format)
-  -K, --key=cert.key            Use client private key (PEM format)
 
 Output Options:
       --text          Output RDAP, plain text "tree" format (default).
@@ -82,6 +79,7 @@ Advanced options (query):
                       - nameserver-search-by-ip
                       - entity-search
                       - entity-search-by-handle
+                      - autnum-search
                       The servers for domain, ip, autnum, url queries can be
                       determined automatically. Otherwise, the RDAP server
                       (--server=URL) must be specified.
@@ -89,20 +87,43 @@ Advanced options (query):
 Advanced options (bootstrapping):
       --cache-dir=DIR Bootstrap cache directory to use. Specify empty string
                       to disable bootstrap caching. The directory is created
-                      automatically as needed. (default: $HOME/.openrdap).
+                      automatically as needed.
+                      (default: $XDG_CACHE_HOME/openrdap, falling back to
+                      $HOME/.cache/openrdap).
       --bs-url=URL    Bootstrap service URL (default: https://data.iana.org/rdap)
       --bs-ttl=SECS   Bootstrap cache time in seconds (default: 3600)
 
-Advanced options (experiments):
-      --exp=test_rdap_net  Use the bootstrap service https://test.rdap.net/rdap
-      --exp=object_tag     Enable object tag support
-                           (draft-hollenbeck-regext-rdap-object-tag)
+Advanced options (authentication):
+  -P, --p12=cert.p12[:password] Use client certificate & private key (PKCS#12 format)
+or:
+  -C, --cert=cert.pem           Use client certificate (PEM format)
+  -K, --key=cert.key            Use client private key (PEM format)
+
 `
 )
 
 const (
 	experimentalBootstrapURL = "https://test.rdap.net/rdap"
 )
+
+// versionString resolves the version to display. Released binaries carry the
+// tag injected via ldflags (releaseVersion); a `go install ...@vX.Y.Z` build
+// reports its module version from the build info; everything else is "(dev)".
+func versionString() string {
+	v := releaseVersion
+
+	if v == "" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			v = info.Main.Version
+		}
+	}
+
+	if v == "" {
+		v = "(dev)"
+	}
+
+	return "OpenRDAP " + v
+}
 
 // CLIOptions specifies options for the command line client.
 type CLIOptions struct {
@@ -120,6 +141,8 @@ type CLIOptions struct {
 // |options| specifies extra options.
 //
 // Returns the program exit code.
+//
+//nolint:gocyclo,cyclop // TODO: refactor.
 func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOptions) int {
 	// For duration timer (in --verbose output).
 	start := time.Now()
@@ -142,6 +165,7 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 
 	// Command line options.
 	verboseFlag := app.Flag("verbose", "").Short('v').Bool()
+	versionFlag := app.Flag("version", "").Short('V').Bool()
 	timeoutFlag := app.Flag("timeout", "").Short('T').Default("30").Uint16()
 	insecureFlag := app.Flag("insecure", "").Short('k').Bool()
 
@@ -179,6 +203,12 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		return 1
 	}
 
+	// Print version string?
+	if *versionFlag {
+		fmt.Fprintln(stdout, version)
+		return 0
+	}
+
 	var verbose func(text string)
 	if *verboseFlag {
 		verbose = func(text string) {
@@ -214,9 +244,8 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 
 	// Enable the -e selection of experiments?
 	if *experimentalFlag {
-		verbose("rdap: Enabled -e/--experiments: test_rdap_net, object_tag")
+		verbose("rdap: Enabled -e/--experiments: test_rdap_net")
 		experiments["test_rdap_net"] = true
-		experiments["object_tag"] = true
 	}
 
 	// Forced sandbox mode?
@@ -250,7 +279,6 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		autnum := strings.ToUpper(queryText)
 		autnum = strings.TrimPrefix(autnum, "AS")
 		result, err := strconv.ParseUint(autnum, 10, 32)
-
 		if err != nil {
 			printError(stderr, fmt.Sprintf("Invalid ASN '%s'", queryText))
 			return 1
@@ -288,6 +316,8 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		req = NewRequest(NameserverSearchRequest, queryText)
 	case "nameserver-search-by-ip":
 		req = NewRequest(NameserverSearchByNameserverIPRequest, queryText)
+	case "autnum-search":
+		req = NewRequest(AutnumSearchRequest, queryText)
 	default:
 		printError(stderr, fmt.Sprintf("Unknown query type '%s'", *queryType))
 		return 1
@@ -304,7 +334,6 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 	// Server URL specified (--server)?
 	if *serverFlag != "" {
 		serverURL, err := url.Parse(*serverFlag)
-
 		if err != nil {
 			printError(stderr, fmt.Sprintf("--server error: %s", err))
 			return 1
@@ -319,8 +348,9 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		verbose(fmt.Sprintf("rdap: Using server '%s'", serverURL))
 	}
 
-	// Custom TLS config.
-	tlsConfig := &tls.Config{InsecureSkipVerify: *insecureFlag}
+	// Custom TLS config. The --insecure flag intentionally allows skipping
+	// certificate verification.
+	tlsConfig := &tls.Config{InsecureSkipVerify: *insecureFlag} //nolint:gosec // opt-in via --insecure flag
 
 	bs := &bootstrap.Client{}
 
@@ -336,7 +366,7 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 			if !options.Sandbox {
 				dc.Dir = *cacheDirFlag
 			} else {
-				verbose(fmt.Sprintf("rdap: Ignored --cache-dir option (sandbox mode enabled)"))
+				verbose("rdap: Ignored --cache-dir option (sandbox mode enabled)")
 			}
 		}
 
@@ -384,18 +414,18 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 
 	var clientCert tls.Certificate
 	if *clientCertFilename != "" || *clientKeyFilename != "" {
-		if *clientP12FilenameAndPassword != "" {
-			printError(stderr, fmt.Sprintf("rdap: Error: Can't use both --cert/--key and --p12 together"))
+		switch {
+		case *clientP12FilenameAndPassword != "":
+			printError(stderr, "rdap: Error: Can't use both --cert/--key and --p12 together")
 			return 1
-		} else if *clientCertFilename == "" || *clientKeyFilename == "" {
-			printError(stderr, fmt.Sprintf("rdap: Error: --cert and --key must be used together"))
+		case *clientCertFilename == "" || *clientKeyFilename == "":
+			printError(stderr, "rdap: Error: --cert and --key must be used together")
 			return 1
-		} else if options.Sandbox {
-			verbose(fmt.Sprintf("rdap: Ignored --cert and --key options (sandbox mode enabled)"))
-		} else {
+		case options.Sandbox:
+			verbose("rdap: Ignored --cert and --key options (sandbox mode enabled)")
+		default:
 			var err error
 			clientCert, err = tls.LoadX509KeyPair(*clientCertFilename, *clientKeyFilename)
-
 			if err != nil {
 				printError(stderr, fmt.Sprintf("rdap: Error: cannot load client certificate/key: %s", err))
 				return 1
@@ -408,7 +438,7 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 	} else if *clientP12FilenameAndPassword != "" {
 		// Split the filename and optional password.
 		// [0] is the filename, [1] is the optional password.
-		var p12FilenameAndPassword []string = strings.SplitAfterN(*clientP12FilenameAndPassword, ":", 2)
+		p12FilenameAndPassword := strings.SplitAfterN(*clientP12FilenameAndPassword, ":", 2)
 		p12FilenameAndPassword[0] = strings.TrimSuffix(p12FilenameAndPassword[0], ":")
 
 		// Use a blank password if none was specified.
@@ -423,7 +453,7 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		if options.Sandbox {
 			p12, err = sandbox.LoadFile(p12FilenameAndPassword[0])
 		} else {
-			p12, err = ioutil.ReadFile(p12FilenameAndPassword[0])
+			p12, err = os.ReadFile(p12FilenameAndPassword[0])
 		}
 
 		// Check the file was read correctly.
@@ -435,7 +465,6 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		// Convert P12 to PEM blocks.
 		var blocks []*pem.Block
 		blocks, err = pkcs12.ToPEM(p12, p12FilenameAndPassword[1])
-
 		if err != nil {
 			printError(stderr, fmt.Sprintf("rdap: Error: cannot read client certificate: %s", err))
 			return 1
@@ -448,7 +477,6 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		}
 
 		clientCert, err = tls.X509KeyPair(pemData, pemData)
-
 		if err != nil {
 			printError(stderr, fmt.Sprintf("rdap: Error: cannot read client certificate: %s", err))
 			return 1
@@ -460,9 +488,15 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 	}
 
 	// Custom HTTP client. Used to disable TLS certificate verification.
-	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
+	// Clone keeps the defaults (proxy, timeouts, HTTP/2) without mutating the
+	// shared global. HTTP/2 matters: some servers, including TWNIC, reject
+	// HTTP/1.1 with 426 Upgrade Required.
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, ForceAttemptHTTP2: true}
+	// Embedders may have replaced the global with a non-*http.Transport.
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = t.Clone()
 	}
+	transport.TLSClientConfig = tlsConfig
 
 	// Setup http.RoundTripper for http clients
 	bs.HTTP = &http.Client{
@@ -476,13 +510,12 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		HTTP:      httpClient,
 		Bootstrap: bs,
 
-		Verbose:                   verbose,
-		UserAgent:                 version,
-		ServiceProviderExperiment: experiments["object_tag"],
+		Verbose:   verbose,
+		UserAgent: version,
 	}
 
 	if *insecureFlag {
-		verbose(fmt.Sprintf("rdap: SSL certificate validation disabled"))
+		verbose("rdap: SSL certificate validation disabled")
 	}
 
 	// Set the request timeout.
@@ -504,13 +537,13 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 		return 1
 	}
 
-	// Insert a blank line to seperate verbose messages/proper output.
+	// Insert a blank line to separate verbose messages/proper output.
 	if *verboseFlag {
 		fmt.Fprintln(stderr, "")
 	}
 
 	// Output formatting.
-	if !(*outputFormatText || *outputFormatWhois || *outputFormatJSON || *outputFormatRaw) {
+	if !*outputFormatText && !*outputFormatWhois && !*outputFormatJSON && !*outputFormatRaw {
 		*outputFormatText = true
 	}
 
@@ -526,14 +559,21 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 
 	// Print the raw response out?
 	if *outputFormatRaw {
-		fmt.Printf("%s", resp.HTTP[0].Body)
+		fmt.Fprintf(stdout, "%s", resp.HTTP[0].Body)
 	}
 
 	// Print the response, JSON pretty-printed?
 	if *outputFormatJSON {
 		var out bytes.Buffer
-		json.Indent(&out, resp.HTTP[0].Body, "", "  ")
-		out.WriteTo(os.Stdout)
+		if err := json.Indent(&out, resp.HTTP[0].Body, "", "  "); err != nil {
+			printError(stderr, fmt.Sprintf("Error: response body is not valid JSON: %s", err))
+			return 1
+		}
+
+		if _, err := out.WriteTo(stdout); err != nil {
+			printError(stderr, fmt.Sprintf("Error writing output: %s", err))
+			return 1
+		}
 	}
 
 	// Print WHOIS style response out?
@@ -554,10 +594,10 @@ func RunCLI(args []string, stdout io.Writer, stderr io.Writer, options CLIOption
 
 func safePrint(v string) string {
 	removeBadChars := func(r rune) rune {
-		switch {
-		case r == '\000':
+		switch r {
+		case '\000':
 			return -1
-		case r == '\n':
+		case '\n':
 			return ' '
 		default:
 			return r

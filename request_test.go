@@ -116,7 +116,8 @@ func TestNewRawRequest(t *testing.T) {
 
 	actualURL := r.URL()
 	if actualURL.String() != urlString {
-		t.Errorf("Raw query for %s got %s, expected %s\n",
+		t.Errorf(
+			"Raw query for %s got %s, expected %s\n",
 			urlString,
 			actualURL.String(),
 			urlString,
@@ -164,6 +165,11 @@ func TestNewSearchRequests(t *testing.T) {
 			EntitySearchByHandleRequest,
 			"MY-HANDLE*&x=1",
 			"entities?handle=MY-HANDLE%2A%26x%3D1",
+		},
+		{
+			AutnumSearchRequest,
+			"AS6006*&x=1",
+			"autnums?handle=AS6006%2A%26x%3D1",
 		},
 	}
 
@@ -236,5 +242,26 @@ func TestNewAutoRequest(t *testing.T) {
 				r.Type,
 				test.ExpectedType)
 		}
+	}
+}
+
+// escapePath runs on every request path. The clean case (no byte needs
+// escaping) is overwhelmingly common and should not allocate.
+var (
+	benchEscapePathClean = "rdap.example.com"
+	benchEscapePathDirty = "xn--n3h.example/path with spaces & symbols"
+)
+
+func BenchmarkEscapePathClean(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		_ = escapePath(benchEscapePathClean)
+	}
+}
+
+func BenchmarkEscapePathDirty(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		_ = escapePath(benchEscapePathDirty)
 	}
 }

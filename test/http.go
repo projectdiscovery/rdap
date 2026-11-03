@@ -84,7 +84,7 @@ func Get(url string) []byte {
 
 // buildResponses loads every test dataset's mock HTTP responses from testdata.
 func buildResponses() map[TestDataset][]response {
-	r := map[TestDataset][]response{}
+	r := make(map[TestDataset][]response)
 
 	load := func(set TestDataset, status int, url, filename string) {
 		body := LoadFile(filename)

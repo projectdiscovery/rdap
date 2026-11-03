@@ -222,7 +222,7 @@ linters:
       # Default: [ switch ]
       check:
         - switch
-        - map
+        - mapliteral
 
     exhaustruct:
       # List of regular expressions to exclude struct packages and their names from checks.
@@ -337,7 +337,7 @@ linters:
         # This library's own interfaces are returned by factory/strategy
         # functions (e.g. newRegistry picks a Registry implementation by type),
         # which is correct design. Still flags leaking third-party interfaces.
-        - github.com/openrdap/rdap
+        - github.com/projectdiscovery/rdap
 
     mnd:
       # List of function patterns to exclude from analysis.
